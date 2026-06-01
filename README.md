@@ -61,6 +61,19 @@ python -m voice_agent.web_server --port 8000
 
 ---
 
+## Running Tests
+
+Dev dependencies (including `pytest`) are kept separate from runtime deps so the production install stays slim.
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+Pytest config lives in `pyproject.toml` (`testpaths`, `pythonpath`, and `cache_dir` are pinned there so `pytest` works the same locally and in CI).
+
+---
+
 ## Audio Pipeline
 
 | Stage | Choice | Why |
