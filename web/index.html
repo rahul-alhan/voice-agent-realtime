@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Voice Agent — Realtime + RAG</title>
+<style>
+  body { font-family: system-ui, sans-serif; padding: 2rem; max-width: 640px; margin: 0 auto; }
+  button { padding: 0.75rem 1.25rem; font-size: 1rem; border-radius: 8px; border: 1px solid #444; background: #111; color: #fff; cursor: pointer; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #status { margin-top: 1rem; color: #555; }
+</style>
+</head>
+<body>
+  <h1>Voice Agent</h1>
+  <p>Press <strong>Start</strong> and ask a question about the knowledge base. Press <strong>Stop</strong> to end the session.</p>
+  <button id="start">Start</button>
+  <button id="stop" disabled>Stop</button>
+  <div id="status">idle</div>
+
+<script>
+const startBtn = document.getElementById('start');
+const stopBtn = document.getElementById('stop');
+const status = document.getElementById('status');
+
+let ws, ctx, micStream, processor, playhead = 0;
+const SR = 16000;
+
+async function start() {
+  status.textContent = "connecting...";
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = async () => {
+    status.textContent = "listening...";
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SR });
+    playhead = ctx.currentTime;
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: SR, channelCount: 1 } });
+    const source = ctx.createMediaStreamSource(micStream);
+    processor = ctx.createScriptProcessor(2048, 1, 1);
+    processor.onaudioprocess = e => {
+      const input = e.inputBuffer.getChannelData(0);
+      const pcm = new Int16Array(input.length);
+      for (let i = 0; i < input.length; i++) pcm[i] = Math.max(-32768, Math.min(32767, input[i] * 32768));
+      if (ws.readyState === 1) ws.send(pcm.buffer);
+    };
+    source.connect(processor);
+    processor.connect(ctx.destination);
+  };
+
+  ws.onmessage = ev => {
+    const i16 = new Int16Array(ev.data);
+    const f32 = new Float32Array(i16.length);
+    for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+    const buf = ctx.createBuffer(1, f32.length, SR);
+    buf.copyToChannel(f32, 0);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    const startAt = Math.max(ctx.currentTime, playhead);
+    src.start(startAt);
+    playhead = startAt + buf.duration;
+  };
+
+  ws.onclose = () => { status.textContent = "closed"; };
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+}
+
+function stop() {
+  if (processor) processor.disconnect();
+  if (micStream) micStream.getTracks().forEach(t => t.stop());
+  if (ws && ws.readyState === 1) ws.close();
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  status.textContent = "idle";
+}
+
+startBtn.onclick = start;
+stopBtn.onclick = stop;
+</script>
+</body>
+</html>
