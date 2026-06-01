@@ -13,16 +13,20 @@ FRAMES_PER_CHUNK = SAMPLE_RATE * CHUNK_MS // 1000
 
 
 class Microphone:
-    def __init__(self):
+    def __init__(self, loop: asyncio.AbstractEventLoop | None = None):
         import sounddevice as sd
         self._sd = sd
         self._queue: asyncio.Queue[bytes] = asyncio.Queue()
+        # sounddevice invokes _callback on a native PortAudio thread, so we
+        # must hop back onto the asyncio loop before touching the Queue —
+        # asyncio.Queue is NOT thread-safe.
+        self._loop = loop or asyncio.get_event_loop()
         self._stream = None
 
     def _callback(self, indata, frames, time_info, status):
         if status:
             print(f"mic status: {status}")
-        self._queue.put_nowait(bytes(indata))
+        self._loop.call_soon_threadsafe(self._queue.put_nowait, bytes(indata))
 
     def start(self):
         self._stream = self._sd.RawInputStream(

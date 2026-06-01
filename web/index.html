@@ -13,6 +13,10 @@
 <body>
   <h1>Voice Agent</h1>
   <p>Press <strong>Start</strong> and ask a question about the knowledge base. Press <strong>Stop</strong> to end the session.</p>
+  <p>
+    <label for="token">Access token:</label>
+    <input id="token" type="password" placeholder="VOICE_AGENT_TOKEN" autocomplete="off" />
+  </p>
   <button id="start">Start</button>
   <button id="stop" disabled>Stop</button>
   <div id="status">idle</div>
@@ -20,14 +24,22 @@
 <script>
 const startBtn = document.getElementById('start');
 const stopBtn = document.getElementById('stop');
+const tokenInput = document.getElementById('token');
 const status = document.getElementById('status');
 
 let ws, ctx, micStream, processor, playhead = 0;
 const SR = 16000;
 
 async function start() {
+  const token = (tokenInput.value || '').trim();
+  if (!token) {
+    status.textContent = "enter your access token first";
+    return;
+  }
   status.textContent = "connecting...";
-  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+  const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  const url = scheme + location.host + '/ws?token=' + encodeURIComponent(token);
+  ws = new WebSocket(url);
   ws.binaryType = "arraybuffer";
 
   ws.onopen = async () => {

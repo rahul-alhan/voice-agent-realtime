@@ -29,9 +29,23 @@ class RealtimeAgent:
         self.on_audio_out = on_audio_out
         self.on_event = on_event or (lambda e: None)
         self.ws = None
+        self._reader_task: asyncio.Task | None = None
 
     async def __aenter__(self):
-        self.ws = await websockets.connect(self.url, extra_headers=self.headers, max_size=10 * 1024 * 1024)
+        # websockets 13 renamed extra_headers -> additional_headers. Support
+        # both so we don't pin downstream apps to a single websockets release.
+        try:
+            self.ws = await websockets.connect(
+                self.url,
+                additional_headers=self.headers,
+                max_size=10 * 1024 * 1024,
+            )
+        except TypeError:
+            self.ws = await websockets.connect(
+                self.url,
+                extra_headers=self.headers,
+                max_size=10 * 1024 * 1024,
+            )
         await self._send({
             "type": "session.update",
             "session": {
@@ -46,10 +60,19 @@ class RealtimeAgent:
                 "tool_choice": "auto",
             },
         })
-        asyncio.create_task(self._reader())
+        # Retain a strong reference so the reader task isn't garbage-collected
+        # mid-stream (asyncio only holds a weak ref to background tasks).
+        self._reader_task = asyncio.create_task(self._reader())
         return self
 
     async def __aexit__(self, *_):
+        if self._reader_task is not None:
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._reader_task = None
         if self.ws:
             await self.ws.close()
 

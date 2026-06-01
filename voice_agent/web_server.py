@@ -5,6 +5,8 @@ import argparse
 import asyncio
 import base64
 import json
+import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -12,6 +14,24 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .realtime_client import RealtimeAgent
+
+log = logging.getLogger(__name__)
+
+# Require a shared bearer-style token at startup so the /ws endpoint
+# cannot be opened by anonymous callers (which would otherwise consume
+# the server-side OPENAI_API_KEY-backed Realtime session).
+VOICE_AGENT_TOKEN = os.environ.get("VOICE_AGENT_TOKEN")
+if not VOICE_AGENT_TOKEN:
+    raise RuntimeError(
+        "VOICE_AGENT_TOKEN env var is required to start the web server. "
+        "Set it to a random secret and pass the same value as ?token=... "
+        "from the browser client."
+    )
+
+# Hard cap on the size of a single audio frame from the browser.
+# 16 kHz mono PCM16 @ ~2s ≈ 64 KB; anything larger is almost certainly
+# abuse and would balloon our outbound Realtime traffic.
+MAX_AUDIO_BYTES = 64_000
 
 app = FastAPI()
 
@@ -26,6 +46,13 @@ async def index() -> HTMLResponse:
 
 @app.websocket("/ws")
 async def ws(client: WebSocket):
+    # Authenticate BEFORE accepting the upgrade so unauthorized callers
+    # never get a Realtime-backed session attached to them.
+    token = client.query_params.get("token")
+    if not token or token != VOICE_AGENT_TOKEN:
+        await client.close(code=1008, reason="unauthorized")
+        return
+
     await client.accept()
     queue: asyncio.Queue[bytes] = asyncio.Queue()
 
@@ -42,6 +69,14 @@ async def ws(client: WebSocket):
         try:
             while True:
                 pcm = await client.receive_bytes()
+                if len(pcm) > MAX_AUDIO_BYTES:
+                    log.warning(
+                        "dropping oversize audio frame from /ws client: %d bytes (max %d)",
+                        len(pcm),
+                        MAX_AUDIO_BYTES,
+                    )
+                    await client.close(code=1009, reason="frame too large")
+                    return
                 await agent.send_audio_chunk(pcm)
         except WebSocketDisconnect:
             pass
